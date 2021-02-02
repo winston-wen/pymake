@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+import os
+import shutil
+from os.path import realpath, abspath, expanduser, splitext, isdir, dirname
+import re
+from argparse import ArgumentParser
+import keyword
+import termcolor
+
+def cprint(*args, **kwargs):
+    return
+
+def fullpath(*paths):
+    paths = [str(path) for path in paths]
+    longpath = os.path.join(*paths)
+    _path = realpath(abspath(expanduser(longpath)))
+    return _path
+
+def basename_(path:str):
+    return base
+
+def traverse(src:str, bin:str, exclude:set):
+    codes_src = []
+    codes_bin = []
+    assets_src = []
+    assets_bin = []
+
+    cwd = os.listdir(src)
+    for name in cwd:
+        if name not in exclude:
+            srcpath = fullpath(src, name)
+            binpath = fullpath(bin, name)
+            _name, ext = splitext(name)
+            if isdir(srcpath):
+                cprint(f"[Dir] {srcpath}", color="blue")
+                _c, _cb, _a, _ab = traverse(srcpath, binpath, exclude)
+                codes_src.extend(_c)
+                codes_bin.extend(_cb)
+                assets_src.extend(_a)
+                assets_bin.extend(_ab)
+            elif name == "__init__.py":
+                raise NotImplementedError(f"{src} is a python package, which is not supported by this version!")
+            elif name == "main.py":
+                cprint(f"[Main] {srcpath}", color="cyan")
+                assets_src.append(srcpath)
+                asstes_bin.append(binpath)
+            elif ext == ".py":
+                if not _name.isidentifier() or keyword.iskeyword(_name):
+                    print(f"[Invalid/Omit] {srcpath}", color="yellow")
+                else:
+                    cprint(f"[Code] {srcpath}", color="green")
+                    c_file = fullpath(bin, f"{_name}.c")
+                    so_file = fullpath(bin, f"{_name}.so")
+                    codes_src.append(srcpath)
+                    codes_bin.append((c_file, so_file))
+            else:
+                cprint(f"[Asset] {srcpath}", color="cyan")
+                assets_src.append(srcpath)
+                assets_bin.append(binpath)
+    return codes_src, codes_bin, assets_src, assets_bin
+
+def gcc(py, c, so):
+    inc = fullpath(os.environ.get("PY_INCLUDE"))
+    if inc is None:
+        raise RuntimeError(f"You should set PY_INCLUDE env var to <Python or Anaconda Install Dir>/include/python3.x*/")
+    c_cmd = f"cython -3 \"{py}\" -o \"{c}\""
+    termcolor.cprint(c_cmd, color="blue", attrs=["bold"])
+    os.system(c_cmd)
+    so_cmd = f"gcc -shared -pthread -fPIC -fwrapv -O2 -Wall -fno-strict-aliasing -I\"{inc}\" -o \"{so}\" \"{c}\""
+    termcolor.cprint(so_cmd, color="magenta", attrs=["bold"])
+    os.system(so_cmd)
+    os.remove(c)
+
+def copy(src_file, dst_file):
+    dst_dir = dirname(dst_file)
+    os.makedirs(dst_dir, exist_ok=True)
+    shutil.copy2(src_file, dst_file)
+
+def default_bin(src:str):
+    parent = fullpath(src, "..")
+    proj = src.replace(parent, "").replace("/", "").replace("\\", "")
+    bin_base = proj + "-bin"
+    bin = fullpath(parent, bin_base)
+    return bin
+
+if __name__ == "__main__":
+    _exclude = [".git", ".gitignore", "__pycache__", ".vscode"]
+    parser = ArgumentParser(description="PyMake, a tool which converts a python project to .so libs")
+    parser.add_argument("-i", "-s", "--src", nargs="?", default="", help="Source directory.")
+    parser.add_argument("-o", "-b", "--bin", nargs="?", default="", help="Binary directory.")
+    parser.add_argument("-x", "--exclude", action="append", default=_exclude, help="Exclude pattern(s) relative to source directory.")
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Verbose level.")
+    args = parser.parse_args()
+    src, bin = args.src, args.bin
+    if src == "":
+        src = fullpath(os.getcwd())
+    if bin == "":
+        bin = default_bin(src)
+
+    exclude = set(args.exclude)
+    if args.verbose > 0:
+        cprint = termcolor.cprint
+    #os.system(f"pipreqs \"{src}\" --force")  # It blocks when no internet.
+    if isdir(bin):
+        shutil.rmtree(bin)
+    os.makedirs(bin)
+
+    codes_src, codes_bin, assets_src, assets_bin = traverse(src, bin, exclude)
+    for py, (c, so) in zip(codes_src, codes_bin):
+        gcc(py, c, so)
+    for src_file, dst_file in zip(assets_src, assets_bin):
+        copy(src_file, dst_file)
+
